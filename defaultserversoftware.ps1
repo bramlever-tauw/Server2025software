@@ -37,8 +37,8 @@ Write-Log "[$(Get-Date)] Script gestart"
 # ============================================================
 # Software download locaties
 # ============================================================
-$withSecureUrl = "https://raw.githubusercontent.com/bramlever-tauw/repo/main/ElementsAgentOfflineInstaller.msi"
-$rapid7Url     = "https://raw.githubusercontent.com/bramlever-tauw/repo/main/agentInstaller-x86_64.msi"
+$withSecureUrl = "https://raw.githubusercontent.com/bramlever-tauw/Server2025software/main/ElementsAgentOfflineInstaller.msi"
+$rapid7Url     = "https://raw.githubusercontent.com/bramlever-tauw/Server2025software/main/agentInstaller-x86_64.msi"
 
 $withSecureDest = "$tempPath\ElementsAgentOfflineInstaller.msi"
 $rapid7Dest     = "$tempPath\agentInstaller-x86_64.msi"

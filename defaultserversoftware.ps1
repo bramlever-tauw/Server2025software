@@ -1,7 +1,3 @@
-msiexec /i "ElementsAgentOfflineInstaller.msi" VOUCHER= /q
-        Execute-MSI -Action Install -Path 'agentInstaller-x86_64.msi' -Parameters "CUSTOMTOKEN=`"eu:62ec816e-0e6c-47fd-8561-b4251879a2cf`" /QN"
-
-
 param (
     [Parameter(Mandatory = $true)]
     [string]$VOUCHER,
@@ -10,41 +6,96 @@ param (
     [string]$CUSTOMTOKEN
 )
 
-# === Logging setup ===
-$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+# ============================================================
+# Zorg dat C:\Temp bestaat
+# ============================================================
 $tempPath = "C:\Temp"
+if (-not (Test-Path $tempPath)) {
+    New-Item -ItemType Directory -Path $tempPath -Force | Out-Null
+}
+
+# ============================================================
+# Logging setup
+# ============================================================
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logPath = "$tempPath\setup_$timestamp.log"
-New-Item -ItemType Directory -Path $avdPath -Force | Out-Null
 Start-Transcript -Path $logPath
 
 function Write-Log {
     param([string]$message)
-    try {
-        $message | Add-Content -Path $logPath
-    } catch {
-        Write-Host "Logfout: $message"
-    }
+    $message | Add-Content -Path $logPath
+}
+
+function Write-Status {
+    param([string]$status)
+    $statusFile = "C:\WindowsAzure\Logs\Plugins\Microsoft.Compute.CustomScriptExtension\status.txt"
+    $status | Out-File -FilePath $statusFile -Encoding utf8
 }
 
 Write-Log "[$(Get-Date)] Script gestart"
 
-# === Software installaties ===
-$withSecureUrl = "https://raw.githubusercontent.com/bramlever/avd-bicep/main/Microsoft.RDInfra.RDAgent.Installer-x64-1.0.12183.900.msi"
-$Rapid7Url = "https://raw.githubusercontent.com/bramlever/avd-bicep/main/Microsoft.RDInfra.RDAgentBootLoader.Installer-x64-1.0.11388.1600.msi"
+# ============================================================
+# Software download locaties
+# ============================================================
+$withSecureUrl = "https://raw.githubusercontent.com/bramlever-tauw/repo/main/ElementsAgentOfflineInstaller.msi"
+$rapid7Url     = "https://raw.githubusercontent.com/bramlever-tauw/repo/main/agentInstaller-x86_64.msi"
 
-$WithSecureDest = "$tempPath\ElementsAgentOfflineInstaller.msi"
-$Rapid7Dest = "$tempPath\agentInstaller-x86_64.msi"
+$withSecureDest = "$tempPath\ElementsAgentOfflineInstaller.msi"
+$rapid7Dest     = "$tempPath\agentInstaller-x86_64.msi"
 
-Invoke-WebRequest -Uri $withSecureUrl -OutFile $agentDest -UseBasicParsing
-Invoke-WebRequest -Uri $Rapid7Url -OutFile $bootloaderDest -UseBasicParsing
+Write-Log "[$(Get-Date)] Downloaden van MSI bestanden..."
 
-Start-Process msiexec.exe -ArgumentList "/i `"$WithSecureDest`" VOUCHER=`"$VOUCHER`" /quiet /norestart" -Wait
-Start-Process msiexec.exe -ArgumentList "/i `"$Rapid7Dest`" CUSTOMTOKEN=`"$CUSTOMTOKEN`" /quiet /norestart" -Wait
+try {
+    Invoke-WebRequest -Uri $withSecureUrl -OutFile $withSecureDest -UseBasicParsing
+    Invoke-WebRequest -Uri $rapid7Url -OutFile $rapid7Dest -UseBasicParsing
+}
+catch {
+    Write-Log "Download mislukt: $_"
+    Write-Status "FAILED: Download error"
+    Stop-Transcript
+    exit 3
+}
 
-powershell.exe -windowstyle hidden -executionpolicy bypass -file Deploy-Application.ps1 -DeploymentType Install
+# ============================================================
+# Installatie WithSecure
+# ============================================================
+Write-Log "[$(Get-Date)] Installatie WithSecure agent gestart..."
 
-Write-Log "[$(Get-Date)] Default software geïnstalleerd."
-Write-Log "[$(Get-Date)] Script voltooid. VM wordt herstart..."
+$withSecure = Start-Process msiexec.exe -ArgumentList "/i `"$withSecureDest`" VOUCHER=$VOUCHER /quiet /norestart" -Wait -PassThru
+
+if ($withSecure.ExitCode -ne 0) {
+    Write-Log "WithSecure installatie mislukt. Exitcode: $($withSecure.ExitCode)"
+    Write-Status "FAILED: WithSecure install error"
+    Stop-Transcript
+    exit 2
+}
+
+# ============================================================
+# Installatie Rapid7
+# ============================================================
+Write-Log "[$(Get-Date)] Installatie Rapid7 agent gestart..."
+
+$rapid7 = Start-Process msiexec.exe -ArgumentList "/i `"$rapid7Dest`" CUSTOMTOKEN=$CUSTOMTOKEN /quiet /norestart" -Wait -PassThru
+
+if ($rapid7.ExitCode -ne 0) {
+    Write-Log "Rapid7 installatie mislukt. Exitcode: $($rapid7.ExitCode)"
+    Write-Status "FAILED: Rapid7 install error"
+    Stop-Transcript
+    exit 2
+}
+
+# ============================================================
+# Afronding
+# ============================================================
+Write-Log "[$(Get-Date)] Alle software succesvol geïnstalleerd en reboot wordt ingepland..."
+
+# Maak een geplande taak die over 30 seconden reboot
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command `"Restart-Computer -Force`""
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(30)
+Register-ScheduledTask -TaskName "PostCSEReboot" -Action $action -Trigger $trigger -RunLevel Highest -Force
+
+Write-Status "SUCCESS"
+
 Stop-Transcript
 
-Restart-Computer -Force
+exit 0
